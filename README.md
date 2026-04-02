@@ -39,7 +39,7 @@ Waves of ocean creatures swarm you from every direction. Dodge, aim, and fire to
 - 🐡 **Pufferfish** — Slow but tough. Puffs up and sprouts spikes when hit. 3 HP, worth 30 points.
 - 🐟 **Anglerfish** — The real threat. Fast, aggressive, and hard to shake. 2 HP, worth 50 points.
 
-Difficulty ramps up over time — enemies get faster and spawn more frequently the longer you survive.
+Difficulty ramps up over time; enemies get faster and spawn more frequently the longer you survive.
 
 ---
 
@@ -52,4 +52,4 @@ Difficulty ramps up over time — enemies get faster and spawn more frequently t
 
 ---
 
-*This game was built entirely with the help of [Claude Code](https://claude.ai/code) — proof that you don't need to be a developer to build something you're proud of.*
+*This game was built entirely with the help of [Claude Code](https://claude.ai/code). It's proof that you don't need to be a developer to build something you're proud of.*
