@@ -108,6 +108,11 @@ let homingMissiles=[];
 let homingCD=0;
 const HOMING_CD_MAX=240;              // 4s at 60fps
 
+// ── HEALING ITEMS ─────────────────────────────────────
+let healItem=null;          // only one on screen at a time
+let healRespawnTimer=0;     // counts down to next spawn
+const HEAL_RESPAWN=3600;    // 60s at 60fps
+
 // ── INPUT ─────────────────────────────────────────────
 const keys={};
 // mx/my are in SCREEN space; convert to world space when needed
@@ -779,7 +784,7 @@ function spawnEnemy(){
     vx:(dx/dist)*spd,vy:(dy/dist)*spd,
     speed:spd,w:c.w,h:c.h,
     health:c.hp,maxHealth:c.hp,
-    points:c.points,color:c.color,
+    points:c.pts,color:c.color,
     moveAng,drawAngle:moveAng+Math.PI,
     anim:0,hitFlash:0,
   });
@@ -903,6 +908,8 @@ function startGame(){
   level=1; xp=0; levelState='playing'; levelStateTimer=0;
   bosses=[]; bossProjectiles=[]; homingMissiles=[];
   hasHoming=false; hasBackup=false; homingCD=0; cthulhuPhase=1;
+  // Heal item: first one spawns after 30s
+  healItem=null; healRespawnTimer=1800;
   player.x=WORLD_W/2; player.y=WORLD_H/2; player.angle=0;
   player.shootCD=0; player.invincible=false; player.invTimer=0;
   camX=player.x-W/2; camY=player.y-H/2;
@@ -1212,6 +1219,52 @@ function updateDrawPopups(){
   });
 }
 
+// ── HEALING ITEMS ─────────────────────────────────────
+function spawnHealItem(){
+  // Spawn somewhere in the world within reach of the player (800-1600px away)
+  const ang=Math.random()*Math.PI*2;
+  const dist=800+Math.random()*800;
+  const x=Math.max(80,Math.min(WORLD_W-80,player.x+Math.cos(ang)*dist));
+  const y=Math.max(80,Math.min(WORLD_H-80,player.y+Math.sin(ang)*dist));
+  healItem={x,y,pulse:0};
+}
+
+function drawHealItem(h){
+  ctx.save(); ctx.translate(h.x,h.y);
+  h.pulse=(h.pulse||0)+0.06;
+  const glow=0.35+Math.sin(h.pulse)*0.2;
+  // Outer glow ring
+  ctx.strokeStyle=`rgba(60,255,130,${glow*0.5})`; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(0,0,22+Math.sin(h.pulse)*3,0,Math.PI*2); ctx.stroke();
+  // Background circle
+  ctx.fillStyle='rgba(10,30,18,0.92)';
+  ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=`rgba(60,255,130,${0.7+glow*0.3})`; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.stroke();
+  // Red cross
+  ctx.fillStyle=`rgba(255,70,70,${0.85+glow*0.15})`;
+  ctx.fillRect(-7,-2.5,14,5);
+  ctx.fillRect(-2.5,-7,5,14);
+  ctx.restore();
+}
+
+function updateHealItems(){
+  if(levelState==='thanks') return;
+  if(!healItem){
+    healRespawnTimer--;
+    if(healRespawnTimer<=0) spawnHealItem();
+    return;
+  }
+  // Check if player touches it
+  if(dist2(player.x,player.y,healItem.x,healItem.y)<(player.r+18)**2){
+    lives=Math.min(lives+1,5); // max 5 lives
+    spawnExplosion(healItem.x,healItem.y,'#3cff82');
+    sfx.levelup();
+    healItem=null;
+    healRespawnTimer=HEAL_RESPAWN;
+  }
+}
+
 // ── HOMING MISSILES ───────────────────────────────────
 function updateHomingMissiles(){
   homingMissiles=homingMissiles.filter(m=>{
@@ -1446,6 +1499,7 @@ function update(){
     updateHomingMissiles();
     if(levelState==='boss') updateBosses();
     if(levelState==='boss') { enemies.forEach(e=>{ if(dist2(player.x,player.y,e.x,e.y)<(player.r+e.w*0.38)**2) hitPlayer(); }); }
+    updateHealItems();
     updateParticles();
     return;
   }
@@ -1595,6 +1649,7 @@ function update(){
     return p.life>0;
   });
 
+  updateHealItems();
   updateParticles();
 }
 
@@ -1665,6 +1720,7 @@ function draw(){
       }
     });
 
+    if(healItem) drawHealItem(healItem);
     drawBackupSubs();
     drawSub();
     drawParticles();
