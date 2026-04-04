@@ -112,11 +112,12 @@ const HOMING_CD_MAX=240;
 let dashCD=0;
 const DASH_CD_MAX=120;   // 2s cooldown
 let dashVx=0, dashVy=0, dashTimer=0;
+let dashTrails=[];        // afterimage ghosts
 
 // ── HEALING ITEMS ─────────────────────────────────────
-let healItem=null;          // only one on screen at a time
-let healRespawnTimer=0;     // counts down to next spawn
-const HEAL_RESPAWN=3600;    // 60s at 60fps
+let healItem=null;            // only one on screen at a time
+let dmgDealt=0;               // damage dealt since last pickup spawned
+const HEAL_DMG_THRESHOLD=200; // spawn after 200 damage dealt
 
 // ── INPUT ─────────────────────────────────────────────
 const keys={};
@@ -838,10 +839,10 @@ function rocketExplode(r){
   spawnBigExplosion(r.x,r.y); sfx.explode();
   const RADIUS=120;
   enemies.forEach(e=>{
-    if(dist2(r.x,r.y,e.x,e.y)<RADIUS*RADIUS){ e.health-=6; e.hitFlash=20; }
+    if(dist2(r.x,r.y,e.x,e.y)<RADIUS*RADIUS){ e.health-=6; e.hitFlash=20; trackDamage(6); }
   });
   bosses.forEach(b=>{
-    if(dist2(r.x,r.y,b.x,b.y)<RADIUS*RADIUS){ b.health-=6; b.hitFlash=20; }
+    if(dist2(r.x,r.y,b.x,b.y)<RADIUS*RADIUS){ b.health-=6; b.hitFlash=20; trackDamage(6); }
   });
   // Homing rockets split into 2 mini homing missiles
   if(r.homing){
@@ -914,7 +915,6 @@ function spawnCthulhuPhase(phase){
 function doDash(){
   if(dashCD>0) return;
   dashCD=DASH_CD_MAX;
-  // Dash in movement direction (from held keys), or forward if nothing held
   let dx=0, dy=0;
   if(keys['ArrowUp']   ||keys['KeyW']) dy=-1;
   if(keys['ArrowDown'] ||keys['KeyS']) dy= 1;
@@ -922,10 +922,9 @@ function doDash(){
   if(keys['ArrowRight']||keys['KeyD']) dx= 1;
   if(dx===0&&dy===0){ dx=Math.cos(player.angle); dy=Math.sin(player.angle); }
   const mag=Math.sqrt(dx*dx+dy*dy)||1;
-  dashVx=(dx/mag)*18; dashVy=(dy/mag)*18; dashTimer=8;
-  // Brief invincibility during dash
-  player.invincible=true; player.invTimer=Math.max(player.invTimer,20);
-  spawnExplosion(player.x,player.y,'#88ccff');
+  dashVx=(dx/mag)*16; dashVy=(dy/mag)*16; dashTimer=10;
+  // Full invincibility for the entire dash duration + small buffer
+  player.invincible=true; player.invTimer=dashTimer+12;
 }
 
 function hitPlayer(){
@@ -949,9 +948,8 @@ function startGame(){
   level=1; xp=0; levelState='playing'; levelStateTimer=0;
   bosses=[]; bossProjectiles=[]; homingMissiles=[];
   hasHoming=false; hasBackup=false; homingCD=0; cthulhuPhase=1;
-  // Heal item: first one spawns after 30s
-  healItem=null; healRespawnTimer=1800;
-  dashCD=0; dashVx=0; dashVy=0; dashTimer=0;
+  healItem=null; dmgDealt=0;
+  dashCD=0; dashVx=0; dashVy=0; dashTimer=0; dashTrails=[];
   player.x=WORLD_W/2; player.y=WORLD_H/2; player.angle=0;
   player.shootCD=0; player.invincible=false; player.invTimer=0;
   camX=player.x-W/2; camY=player.y-H/2;
@@ -1030,12 +1028,24 @@ function drawHUD(){
 
   // Lives
   ctx.fillStyle='rgba(4,12,24,0.75)';
-  ctx.fillRect(W-178,8,170,34); ctx.strokeStyle='#2a5a8a'; ctx.lineWidth=1; ctx.strokeRect(W-178,8,170,34);
+  ctx.fillRect(W-178,8,170,52); ctx.strokeStyle='#2a5a8a'; ctx.lineWidth=1; ctx.strokeRect(W-178,8,170,52);
   ctx.fillStyle='#a8d8f0'; ctx.font='12px monospace'; ctx.fillText('LIVES:',W-170,28);
   for(let i=0;i<lives;i++){
     ctx.fillStyle='#4a7898';
     ctx.beginPath(); ctx.ellipse(W-108+i*36,22,13,6,0,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='#f4c830'; ctx.fillRect(W-101+i*36,18,5,4);
+  }
+  // Heal progress bar
+  if(!healItem){
+    const hp=Math.min(1,dmgDealt/HEAL_DMG_THRESHOLD);
+    ctx.fillStyle='#0a1a10'; ctx.fillRect(W-170,38,154,10);
+    ctx.fillStyle=hp>0.75?'#44ff88':hp>0.4?'#88ffaa':'#3caa66';
+    ctx.fillRect(W-170,38,154*hp,10);
+    ctx.strokeStyle='#1a4a2a'; ctx.lineWidth=1; ctx.strokeRect(W-170,38,154,10);
+    ctx.fillStyle='#5adc8a'; ctx.font='9px monospace'; ctx.fillText(`HEAL ${Math.floor(hp*100)}%`,W-170,56);
+  } else {
+    ctx.fillStyle='#44ff88'; ctx.font='bold 10px monospace';
+    if(Math.floor(frame/18)%2===0) ctx.fillText('✚ HEAL READY!',W-170,52);
   }
 }
 
@@ -1293,6 +1303,22 @@ function drawHealItem(h){
   ctx.restore();
 }
 
+function drawDashTrails(){
+  dashTrails=dashTrails.filter(t=>t.life>0);
+  dashTrails.forEach(t=>{
+    t.life--;
+    const a=(t.life/t.maxLife)*0.45;
+    ctx.save(); ctx.translate(t.x,t.y); ctx.rotate(t.angle);
+    ctx.globalAlpha=a;
+    ctx.strokeStyle='#88ccff'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.ellipse(0,0,28,13,0,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle='#aaddff'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.ellipse(-2,-2,22,9,0,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.restore();
+  });
+}
+
 function drawHealArrow(){
   if(!healItem) return;
   // Direction from screen center to item in world space
@@ -1320,20 +1346,19 @@ function drawHealArrow(){
   ctx.restore();
 }
 
+function trackDamage(amount){
+  if(healItem) return; // already one on screen
+  dmgDealt+=amount;
+  if(dmgDealt>=HEAL_DMG_THRESHOLD){ dmgDealt=0; spawnHealItem(); }
+}
+
 function updateHealItems(){
-  if(levelState==='thanks') return;
-  if(!healItem){
-    healRespawnTimer--;
-    if(healRespawnTimer<=0) spawnHealItem();
-    return;
-  }
-  // Check if player touches it
+  if(levelState==='thanks'||!healItem) return;
   if(dist2(player.x,player.y,healItem.x,healItem.y)<(player.r+18)**2){
-    lives=Math.min(lives+1,5); // max 5 lives
+    lives=Math.min(lives+1,5);
     spawnExplosion(healItem.x,healItem.y,'#3cff82');
     sfx.levelup();
-    healItem=null;
-    healRespawnTimer=HEAL_RESPAWN;
+    healItem=null; dmgDealt=0;
   }
 }
 
@@ -1356,7 +1381,7 @@ function updateHomingMissiles(){
     // Hit enemy
     for(let i=0;i<enemies.length;i++){
       if(dist2(m.x,m.y,enemies[i].x,enemies[i].y)<(enemies[i].w*0.45)**2){
-        enemies[i].health-=3; enemies[i].hitFlash=10; spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit(); return false;
+        enemies[i].health-=3; enemies[i].hitFlash=10; trackDamage(3); spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit(); return false;
       }
     }
     return m.life>0;
@@ -1494,7 +1519,7 @@ function updateBosses(){
     let hit=false;
     for(let i=0;i<bosses.length;i++){
       const b=bosses[i];
-      if(dist2(b2.x,b2.y,b.x,b.y)<(b.w*0.45)**2){ b.health--; b.hitFlash=10; sfx.hit(); hit=true; break; }
+      if(dist2(b2.x,b2.y,b.x,b.y)<(b.w*0.45)**2){ b.health--; b.hitFlash=10; trackDamage(1); sfx.hit(); hit=true; break; }
     }
     return !hit;
   });
@@ -1504,7 +1529,7 @@ function updateBosses(){
     let hit=false;
     for(let i=0;i<bosses.length;i++){
       const b=bosses[i];
-      if(dist2(m.x,m.y,b.x,b.y)<(b.w*0.45)**2){ b.health-=3; b.hitFlash=10; spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit(); hit=true; break; }
+      if(dist2(m.x,m.y,b.x,b.y)<(b.w*0.45)**2){ b.health-=3; b.hitFlash=10; trackDamage(3); spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit(); hit=true; break; }
     }
     return !hit;
   });
@@ -1588,7 +1613,12 @@ function update(){
     if(homingCD>0) homingCD--;
     // Dash
     if(dashCD>0) dashCD--;
-    if(dashTimer>0){ player.x+=dashVx; player.y+=dashVy; dashTimer--; }
+    if(dashTimer>0){
+      dashTrails.push({x:player.x,y:player.y,angle:player.angle,life:10,maxLife:10});
+      player.x=Math.max(40,Math.min(WORLD_W-40,player.x+dashVx));
+      player.y=Math.max(40,Math.min(WORLD_H-40,player.y+dashVy));
+      dashTimer--;
+    }
     updateHomingMissiles();
     if(levelState==='boss'){
       updateBosses();
@@ -1609,7 +1639,7 @@ function update(){
         if(b2.life<=0) return false;
         let hit=false;
         for(let i=0;i<enemies.length;i++){
-          if(dist2(b2.x,b2.y,enemies[i].x,enemies[i].y)<(enemies[i].w*0.42)**2){ enemies[i].health--; enemies[i].hitFlash=10; sfx.hit(); hit=true; break; }
+          if(dist2(b2.x,b2.y,enemies[i].x,enemies[i].y)<(enemies[i].w*0.42)**2){ enemies[i].health--; enemies[i].hitFlash=10; trackDamage(1); sfx.hit(); hit=true; break; }
         }
         return !hit;
       });
@@ -1648,6 +1678,7 @@ function update(){
   // Dash
   if(dashCD>0) dashCD--;
   if(dashTimer>0){
+    dashTrails.push({x:player.x,y:player.y,angle:player.angle,life:10,maxLife:10});
     player.x=Math.max(40,Math.min(WORLD_W-40,player.x+dashVx));
     player.y=Math.max(40,Math.min(WORLD_H-40,player.y+dashVy));
     dashTimer--;
@@ -1765,7 +1796,7 @@ function update(){
     let hit=false;
     for(let i=0;i<enemies.length;i++){
       const e=enemies[i];
-      if(dist2(b.x,b.y,e.x,e.y)<(e.w*0.42)**2){ e.health--; e.hitFlash=10; sfx.hit(); hit=true; break; }
+      if(dist2(b.x,b.y,e.x,e.y)<(e.w*0.42)**2){ e.health--; e.hitFlash=10; trackDamage(1); sfx.hit(); hit=true; break; }
     }
     return !hit;
   });
@@ -1874,6 +1905,7 @@ function draw(){
     });
 
     if(healItem) drawHealItem(healItem);
+    drawDashTrails();
     drawBackupSubs();
     drawSub();
     drawParticles();
