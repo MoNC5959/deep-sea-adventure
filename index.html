@@ -29,8 +29,8 @@
 <body>
 <canvas id="game"></canvas>
 <div id="hint">
-  WASD/ARROWS — Move &nbsp;|&nbsp; Mouse — Aim &nbsp;|&nbsp;
-  Left-Click — Toggle Auto-Fire &nbsp;|&nbsp; Right-Click / X — Rocket ×3 &nbsp;|&nbsp; Q — Homing Missile (after Level 1)
+  WASD/ARROWS — Move &nbsp;|&nbsp; Mouse — Aim &nbsp;|&nbsp; Space — Dash
+  Left-Click — Toggle Auto-Fire &nbsp;|&nbsp; Right-Click / X — Rocket ×3 (Homing after Level 1)
 </div>
 <script>
 // ══════════════════════════════════════════════════════
@@ -106,7 +106,12 @@ let cthulhuPhase=1;                   // 1=large, 2=medium×2, 3=small×4
 let hasHoming=false, hasBackup=false;
 let homingMissiles=[];
 let homingCD=0;
-const HOMING_CD_MAX=240;              // 4s at 60fps
+const HOMING_CD_MAX=240;
+
+// ── DASH ──────────────────────────────────────────────
+let dashCD=0;
+const DASH_CD_MAX=120;   // 2s cooldown
+let dashVx=0, dashVy=0, dashTimer=0;
 
 // ── HEALING ITEMS ─────────────────────────────────────
 let healItem=null;          // only one on screen at a time
@@ -127,9 +132,9 @@ window.addEventListener('keydown',e=>{
     if(state==='menu') startGame();
     else if(state==='gameover') state='menu';
     else if(levelState==='thanks') { state='menu'; levelState='playing'; }
+    else if(state==='playing') doDash();
   }
   if(e.code==='KeyX' && state==='playing') fireRocket();
-  if(e.code==='KeyQ' && state==='playing') fireHoming();
 });
 window.addEventListener('keyup',e=>{ keys[e.code]=false; });
 
@@ -568,8 +573,14 @@ function drawBossShark(b){
     ctx.moveTo(-b.w/2-2,i*6-12); ctx.lineTo(-b.w/2-15,i*6-9); ctx.lineTo(-b.w/2-2,i*6-6);
     ctx.closePath(); ctx.fill();
   }
+  // Wind-up: pulsing red ring (drawn in rotated space, same origin)
+  if(b.windingUp){
+    const wp=Math.sin(b.windTimer*0.25);
+    ctx.strokeStyle=`rgba(255,50,50,${0.5+wp*0.45})`; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.ellipse(0,0,b.w/2+10,b.h/2+10,0,0,Math.PI*2); ctx.stroke();
+  }
   // Rush flash
-  if(b.rushing){ ctx.strokeStyle='rgba(255,50,50,0.6)'; ctx.lineWidth=4; ctx.beginPath(); ctx.ellipse(0,0,b.w/2+4,b.h/2+4,0,0,Math.PI*2); ctx.stroke(); }
+  if(b.rushing){ ctx.strokeStyle='rgba(255,50,50,0.7)'; ctx.lineWidth=5; ctx.beginPath(); ctx.ellipse(0,0,b.w/2+4,b.h/2+4,0,0,Math.PI*2); ctx.stroke(); }
   // Eye
   ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(-b.w/2+12,-8,7,0,Math.PI*2); ctx.fill();
   ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(-b.w/2+14,-10,2.5,0,Math.PI*2); ctx.fill();
@@ -756,7 +767,7 @@ const ECFG={
 };
 
 function spawnEnemy(){
-  if(levelState==='boss'||levelState==='transition'||levelState==='warning'||levelState==='thanks') return;
+  if(levelState==='transition'||levelState==='warning'||levelState==='thanks') return;
   const r=Math.random();
   let type;
   if(level===1){
@@ -811,11 +822,14 @@ function fireRocket(){
   rocketAmmo--;
   rocketTimers.push(ROCKET_CD);
   const ang=player.angle;
+  const spd=7.5;
+  // After Level 1 unlock, rockets are homing
+  const homing=hasHoming;
   rockets.push({
     x:player.x+Math.cos(ang)*36,
     y:player.y+Math.sin(ang)*16,
-    vx:Math.cos(ang)*7.5, vy:Math.sin(ang)*7.5,
-    angle:ang, life:180,
+    vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd,
+    angle:ang, life:180, homing,
   });
   sfx.rocket();
 }
@@ -826,6 +840,16 @@ function rocketExplode(r){
   enemies.forEach(e=>{
     if(dist2(r.x,r.y,e.x,e.y)<RADIUS*RADIUS){ e.health-=6; e.hitFlash=20; }
   });
+  bosses.forEach(b=>{
+    if(dist2(r.x,r.y,b.x,b.y)<RADIUS*RADIUS){ b.health-=6; b.hitFlash=20; }
+  });
+  // Homing rockets split into 2 mini homing missiles
+  if(r.homing){
+    for(let s=-1;s<=1;s+=2){
+      const splitAng=r.angle+s*0.45;
+      homingMissiles.push({x:r.x,y:r.y,vx:Math.cos(splitAng)*8,vy:Math.sin(splitAng)*8,angle:splitAng,life:160,mini:true});
+    }
+  }
 }
 
 function fireHoming(){
@@ -863,7 +887,7 @@ function spawnBoss(type){
     bosses.push({type:'shark',x:bx,y:by,vx:0,vy:0,w:120,h:60,
       health:180,maxHealth:180,anim:0,hitFlash:0,
       eatCD:0,rushCD:0,rushing:false,rushTimer:0,rushVx:0,rushVy:0,
-      drawAngle:0});
+      windingUp:false,windTimer:0,drawAngle:0});
   } else if(type==='cthulhu'){
     cthulhuPhase=1;
     spawnCthulhuPhase(1);
@@ -885,6 +909,23 @@ function spawnCthulhuPhase(phase){
     });
   }
   sfx.phase();
+}
+
+function doDash(){
+  if(dashCD>0) return;
+  dashCD=DASH_CD_MAX;
+  // Dash in movement direction (from held keys), or forward if nothing held
+  let dx=0, dy=0;
+  if(keys['ArrowUp']   ||keys['KeyW']) dy=-1;
+  if(keys['ArrowDown'] ||keys['KeyS']) dy= 1;
+  if(keys['ArrowLeft'] ||keys['KeyA']) dx=-1;
+  if(keys['ArrowRight']||keys['KeyD']) dx= 1;
+  if(dx===0&&dy===0){ dx=Math.cos(player.angle); dy=Math.sin(player.angle); }
+  const mag=Math.sqrt(dx*dx+dy*dy)||1;
+  dashVx=(dx/mag)*18; dashVy=(dy/mag)*18; dashTimer=8;
+  // Brief invincibility during dash
+  player.invincible=true; player.invTimer=Math.max(player.invTimer,20);
+  spawnExplosion(player.x,player.y,'#88ccff');
 }
 
 function hitPlayer(){
@@ -910,6 +951,7 @@ function startGame(){
   hasHoming=false; hasBackup=false; homingCD=0; cthulhuPhase=1;
   // Heal item: first one spawns after 30s
   healItem=null; healRespawnTimer=1800;
+  dashCD=0; dashVx=0; dashVy=0; dashTimer=0;
   player.x=WORLD_W/2; player.y=WORLD_H/2; player.angle=0;
   player.shootCD=0; player.invincible=false; player.invTimer=0;
   camX=player.x-W/2; camY=player.y-H/2;
@@ -1039,29 +1081,32 @@ function drawBossHPBar(totalHP,totalMax,label){
 
 function drawAbilitySlots(){
   let ax=W-190;
-  // Homing missile slot
+  // Dash cooldown slot (always shown while playing)
+  ctx.fillStyle='rgba(4,12,24,0.75)'; ctx.fillRect(ax,100,180,42);
+  ctx.strokeStyle=dashCD>0?'#2a3a5a':'#88ccff'; ctx.lineWidth=1; ctx.strokeRect(ax,100,180,42);
+  ctx.fillStyle=dashCD>0?'#4a6a8a':'#aaddff'; ctx.font='11px monospace';
+  ctx.fillText('[SPC] DASH',ax+8,116);
+  if(dashCD>0){
+    const pct=1-dashCD/DASH_CD_MAX;
+    ctx.fillStyle='#0a1020'; ctx.fillRect(ax+8,122,162,10);
+    ctx.fillStyle='#3399ff'; ctx.fillRect(ax+8,122,162*pct,10);
+    ctx.strokeStyle='#1a3a5a'; ctx.lineWidth=1; ctx.strokeRect(ax+8,122,162,10);
+    ctx.fillStyle='#88ccff'; ctx.font='10px monospace'; ctx.fillText(`${Math.ceil(dashCD/60)}s`,ax+8+162*pct+2,132);
+  } else {
+    ctx.fillStyle='#aaddff'; ctx.font='bold 10px monospace'; ctx.fillText('READY',ax+8,132);
+  }
+  // Homing rockets indicator
   if(hasHoming){
-    ctx.fillStyle='rgba(4,12,24,0.75)'; ctx.fillRect(ax,100,180,48);
-    ctx.strokeStyle=homingCD>0?'#1a4a6a':'#00aadd'; ctx.lineWidth=1; ctx.strokeRect(ax,100,180,48);
-    ctx.fillStyle=homingCD>0?'#4a8aaa':'#00eeff'; ctx.font='11px monospace';
-    ctx.fillText('[Q] HOMING',ax+8,118);
-    if(homingCD>0){
-      const pct=1-homingCD/HOMING_CD_MAX;
-      ctx.fillStyle='#0a1a2e'; ctx.fillRect(ax+8,124,162,10);
-      ctx.fillStyle='#00aadd'; ctx.fillRect(ax+8,124,162*pct,10);
-      ctx.strokeStyle='#1a4a6a'; ctx.lineWidth=1; ctx.strokeRect(ax+8,124,162,10);
-      ctx.fillStyle='#7ac8f0'; ctx.font='10px monospace';
-      ctx.fillText(`${Math.ceil(homingCD/60)}s`,ax+8+162*pct+2,134);
-    } else {
-      ctx.fillStyle='#00eeff'; ctx.font='bold 10px monospace'; ctx.fillText('READY',ax+8,136);
-    }
+    ctx.fillStyle='rgba(4,12,24,0.75)'; ctx.fillRect(ax,148,180,30);
+    ctx.strokeStyle='#00aadd'; ctx.lineWidth=1; ctx.strokeRect(ax,148,180,30);
+    ctx.fillStyle='#00eeff'; ctx.font='11px monospace'; ctx.fillText('✦ ROCKETS: HOMING+SPLIT',ax+8,166);
   }
   // Backup ships indicator
   if(hasBackup){
-    const by2=hasHoming?154:100;
-    ctx.fillStyle='rgba(4,12,24,0.75)'; ctx.fillRect(ax,by2,180,36);
-    ctx.strokeStyle='#2a7a5a'; ctx.lineWidth=1; ctx.strokeRect(ax,by2,180,36);
-    ctx.fillStyle='#44ff88'; ctx.font='11px monospace'; ctx.fillText('⊕ BACKUP SHIPS ACTIVE',ax+8,by2+22);
+    const by2=hasHoming?184:148;
+    ctx.fillStyle='rgba(4,12,24,0.75)'; ctx.fillRect(ax,by2,180,30);
+    ctx.strokeStyle='#2a7a5a'; ctx.lineWidth=1; ctx.strokeRect(ax,by2,180,30);
+    ctx.fillStyle='#44ff88'; ctx.font='11px monospace'; ctx.fillText('⊕ BACKUP SHIPS ACTIVE',ax+8,by2+18);
   }
 }
 
@@ -1085,7 +1130,7 @@ function drawWarningScreen(){
 function drawTransitionScreen(){
   ctx.fillStyle='rgba(4,12,24,0.78)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center';
-  const ability=level===1?'HOMING MISSILES UNLOCKED  [Q]':(level===2?'BACKUP SHIPS DEPLOYED':'FINAL LEVEL COMPLETE!');
+  const ability=level===1?'ROCKETS NOW HOMING + SPLIT!':(level===2?'BACKUP SHIPS DEPLOYED':'FINAL LEVEL COMPLETE!');
   const col=level===1?'#00eeff':level===2?'#44ff88':'#f4c830';
   ctx.fillStyle='#f4c830'; ctx.font='bold 38px monospace'; ctx.fillText('LEVEL CLEAR!',W/2,H/2-50);
   ctx.fillStyle=col; ctx.font='bold 20px monospace'; ctx.fillText(ability,W/2,H/2);
@@ -1171,7 +1216,7 @@ function drawMenu(){
   ctx.fillStyle='#6aaccc'; ctx.font='13px monospace';
   ctx.fillText('WASD / ARROWS — Move',W/2,H/2-26);
   ctx.fillText('Left-Click — Toggle Auto-Fire  |  Mouse — Aim',W/2,H/2+0);
-  ctx.fillText('Right-Click / X — Rocket (×3)  |  Q — Homing (unlock)',W/2,H/2+26);
+  ctx.fillText('Right-Click / X — Rocket (homing after Level 1)  |  Space — Dash',W/2,H/2+26);
   if(Math.floor(frame/22)%2===0){
     ctx.fillStyle='#f4e830'; ctx.font='bold 15px monospace';
     ctx.fillText('▶  PRESS SPACE TO DIVE IN  ◀',W/2,H/2+66);
@@ -1245,6 +1290,33 @@ function drawHealItem(h){
   ctx.fillStyle=`rgba(255,70,70,${0.85+glow*0.15})`;
   ctx.fillRect(-7,-2.5,14,5);
   ctx.fillRect(-2.5,-7,5,14);
+  ctx.restore();
+}
+
+function drawHealArrow(){
+  if(!healItem) return;
+  // Direction from screen center to item in world space
+  const ang=Math.atan2(healItem.y-player.y, healItem.x-player.x);
+  // Clamp to screen edge with margin
+  const margin=28, cx=W/2, cy=H/2;
+  // Check if item is already on screen
+  const sx=healItem.x-camX, sy=healItem.y-camY;
+  if(sx>margin&&sx<W-margin&&sy>margin&&sy<H-margin) return; // on screen, no arrow needed
+  // Find edge intersection
+  const slopes=[ (cy-margin)/Math.abs(Math.cos(ang)||0.001), (cx-margin)/Math.abs(Math.sin(ang)||0.001) ];
+  const t=Math.min(...slopes.filter(s=>s>0));
+  const ax=Math.max(margin,Math.min(W-margin, cx+Math.cos(ang)*t));
+  const ay=Math.max(margin,Math.min(H-margin, cy+Math.sin(ang)*t));
+
+  ctx.save(); ctx.translate(ax,ay); ctx.rotate(ang);
+  const pulse=0.6+Math.sin(frame*0.1)*0.4;
+  ctx.fillStyle=`rgba(60,255,130,${pulse})`;
+  // Arrow shape
+  ctx.beginPath(); ctx.moveTo(14,0); ctx.lineTo(-6,-8); ctx.lineTo(-2,0); ctx.lineTo(-6,8); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle=`rgba(20,100,50,${pulse})`; ctx.lineWidth=1.5; ctx.stroke();
+  // Cross icon next to arrow
+  ctx.fillStyle=`rgba(255,80,80,${pulse})`;
+  ctx.fillRect(-18,-3,10,6); ctx.fillRect(-15,-7,4,14);
   ctx.restore();
 }
 
@@ -1362,13 +1434,17 @@ function updateBosses(){
         enemies.forEach((e,i)=>{ const d=dist2(b.x,b.y,e.x,e.y); if(d<nd){nd=d;ni=i;} });
         if(ni>=0){ b.health=Math.min(b.maxHealth,b.health+20); enemies.splice(ni,1); sfx.chomp(); }
       }
-      // Rush toward player (5s CD / 45 frames duration)
+      // Rush toward player (5s CD) — wind-up 60 frames, then rush 45 frames
       b.rushCD--;
-      if(!b.rushing&&b.rushCD<=0){
-        b.rushCD=300; b.rushing=true; b.rushTimer=45;
+      if(!b.rushing&&!b.windingUp&&b.rushCD<=0){
+        b.windingUp=true; b.windTimer=60;
         const ang=Math.atan2(player.y-b.y,player.x-b.x);
-        b.rushVx=Math.cos(ang)*18; b.rushVy=Math.sin(ang)*18;
-        sfx.phit();
+        b.rushVx=Math.cos(ang)*14.4; b.rushVy=Math.sin(ang)*14.4; // 20% slower than 18
+        sfx.warning();
+      }
+      if(b.windingUp){
+        b.windTimer--;
+        if(b.windTimer<=0){ b.windingUp=false; b.rushing=true; b.rushTimer=45; b.rushCD=300; sfx.phit(); }
       }
       if(b.rushing){
         b.x+=b.rushVx; b.y+=b.rushVy; b.rushTimer--;
@@ -1489,16 +1565,58 @@ function update(){
     if(player.invincible){ player.invTimer--; if(player.invTimer<=0) player.invincible=false; }
     bullets=bullets.filter(b=>b.life>0);
     bullets.forEach(b=>{ b.x+=b.vx; b.y+=b.vy; b.life--; });
-    const dR2=[]; rockets=rockets.filter(r=>{ r.x+=r.vx; r.y+=r.vy; r.life--;
+    // Rockets (with homing)
+    const dR2=[]; rockets=rockets.filter(r=>{
+      if(r.homing){
+        let tx=null,ty=null,bd=1e9;
+        bosses.forEach(b=>{ const d=dist2(r.x,r.y,b.x,b.y); if(d<bd){bd=d;tx=b.x;ty=b.y;} });
+        if(tx===null) enemies.forEach(e=>{ const d=dist2(r.x,r.y,e.x,e.y); if(d<bd){bd=d;tx=e.x;ty=e.y;} });
+        if(tx!==null){
+          const desired=Math.atan2(ty-r.y,tx-r.x);
+          let diff=desired-r.angle; while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+          r.angle+=Math.sign(diff)*Math.min(Math.abs(diff),0.04);
+          r.vx=Math.cos(r.angle)*7.5; r.vy=Math.sin(r.angle)*7.5;
+        }
+      }
+      r.x+=r.vx; r.y+=r.vy; r.life--;
+      for(let i=0;i<bosses.length;i++){ if(dist2(r.x,r.y,bosses[i].x,bosses[i].y)<(bosses[i].w*0.45)**2){ dR2.push(r); return false; } }
+      for(let i=0;i<enemies.length;i++){ if(dist2(r.x,r.y,enemies[i].x,enemies[i].y)<(enemies[i].w*0.52)**2){ dR2.push(r); return false; } }
       const off=r.x<camX-120||r.x>camX+W+120||r.y<camY-120||r.y>camY+H+120||r.life<=0;
-      for(let i=0;i<bosses.length;i++){ if(dist2(r.x,r.y,bosses[i].x,bosses[i].y)<(bosses[i].w*0.45)**2){ bosses[i].health-=6; bosses[i].hitFlash=20; dR2.push(r); return false; } }
       if(off) dR2.push(r); return !off; });
     dR2.forEach(r=>rocketExplode(r));
     for(let i=rocketTimers.length-1;i>=0;i--){ rocketTimers[i]--; if(rocketTimers[i]<=0&&rocketAmmo<ROCKET_MAX){ rocketAmmo++; rocketTimers.splice(i,1); } }
     if(homingCD>0) homingCD--;
+    // Dash
+    if(dashCD>0) dashCD--;
+    if(dashTimer>0){ player.x+=dashVx; player.y+=dashVy; dashTimer--; }
     updateHomingMissiles();
-    if(levelState==='boss') updateBosses();
-    if(levelState==='boss') { enemies.forEach(e=>{ if(dist2(player.x,player.y,e.x,e.y)<(player.r+e.w*0.38)**2) hitPlayer(); }); }
+    if(levelState==='boss'){
+      updateBosses();
+      // Enemy movement + torpedo collision during boss
+      enemies.forEach(e=>{
+        e.anim++;
+        const dx=player.x-e.x, dy=player.y-e.y, dist3=Math.sqrt(dx*dx+dy*dy)||1;
+        const steer=e.type==='jellyfish'?0.02:0.065;
+        e.vx+=(dx/dist3*e.speed-e.vx)*steer; e.vy+=(dy/dist3*e.speed-e.vy)*steer;
+        if(e.type==='jellyfish'){ e.vx+=Math.cos(e.anim*0.07)*0.38; e.vy+=Math.sin(e.anim*0.09)*0.38; }
+        e.x+=e.vx; e.y+=e.vy;
+        const mag=Math.sqrt(e.vx*e.vx+e.vy*e.vy)||1;
+        e.moveAng=Math.atan2(e.vy/mag,e.vx/mag); e.drawAngle=e.moveAng+Math.PI;
+        if(e.hitFlash>0) e.hitFlash--;
+        if(dist2(player.x,player.y,e.x,e.y)<(player.r+e.w*0.38)**2) hitPlayer();
+      });
+      bullets=bullets.filter(b2=>{
+        if(b2.life<=0) return false;
+        let hit=false;
+        for(let i=0;i<enemies.length;i++){
+          if(dist2(b2.x,b2.y,enemies[i].x,enemies[i].y)<(enemies[i].w*0.42)**2){ enemies[i].health--; enemies[i].hitFlash=10; sfx.hit(); hit=true; break; }
+        }
+        return !hit;
+      });
+      enemies=enemies.filter(e=>{ if(e.health<=0){ spawnExplosion(e.x,e.y,e.color); score+=e.pts||e.points||0; sfx.explode(); return false; } return dist2(e.x,e.y,player.x,player.y)<(W+200)**2; });
+      // Enemy spawning continues during boss
+      spawnTimer++; if(spawnTimer>=spawnRate){ spawnTimer=0; spawnEnemy(); }
+    }
     updateHealItems();
     updateParticles();
     return;
@@ -1527,6 +1645,14 @@ function update(){
   camX+=(targetCamX-camX)*0.1;
   camY+=(targetCamY-camY)*0.1;
 
+  // Dash
+  if(dashCD>0) dashCD--;
+  if(dashTimer>0){
+    player.x=Math.max(40,Math.min(WORLD_W-40,player.x+dashVx));
+    player.y=Math.max(40,Math.min(WORLD_H-40,player.y+dashVy));
+    dashTimer--;
+  }
+
   // Homing CD
   if(homingCD>0) homingCD--;
   updateHomingMissiles();
@@ -1550,10 +1676,29 @@ function update(){
   bullets=bullets.filter(b=>b.life>0);
   bullets.forEach(b=>{ b.x+=b.vx; b.y+=b.vy; b.life--; });
 
-  // Rockets — check enemy contact FIRST, then check offscreen
+  // Rockets — homing steer + contact check
   const deadRockets=[];
   rockets=rockets.filter(r=>{
+    // Homing steering toward nearest boss/enemy
+    if(r.homing){
+      let tx=null, ty=null, bd=1e9;
+      bosses.forEach(b=>{ const d=dist2(r.x,r.y,b.x,b.y); if(d<bd){bd=d;tx=b.x;ty=b.y;} });
+      if(tx===null) enemies.forEach(e=>{ const d=dist2(r.x,r.y,e.x,e.y); if(d<bd){bd=d;tx=e.x;ty=e.y;} });
+      if(tx!==null){
+        const desired=Math.atan2(ty-r.y,tx-r.x);
+        let diff=desired-r.angle;
+        while(diff>Math.PI) diff-=Math.PI*2; while(diff<-Math.PI) diff+=Math.PI*2;
+        r.angle+=Math.sign(diff)*Math.min(Math.abs(diff),0.04);
+        r.vx=Math.cos(r.angle)*7.5; r.vy=Math.sin(r.angle)*7.5;
+      }
+    }
     r.x+=r.vx; r.y+=r.vy; r.life--;
+    // Contact with any boss → explode
+    for(let i=0;i<bosses.length;i++){
+      if(dist2(r.x,r.y,bosses[i].x,bosses[i].y)<(bosses[i].w*0.45)**2){
+        deadRockets.push(r); return false;
+      }
+    }
     // Contact with any enemy → explode immediately
     for(let i=0;i<enemies.length;i++){
       const e=enemies[i];
@@ -1693,6 +1838,14 @@ function draw(){
       if(b.type==='shark')   drawBossShark(b);
       if(b.type==='cthulhu') drawBossCthulhu(b);
       ctx.restore();
+      // Wind-up exclamation mark above shark (drawn after restore, in unrotated world space)
+      if(b.type==='shark'&&b.windingUp){
+        const wp=Math.sin(b.windTimer*0.25);
+        ctx.save(); ctx.translate(b.x,b.y);
+        ctx.fillStyle=`rgba(255,60,60,${0.75+wp*0.25})`; ctx.font=`bold ${30+Math.floor(wp*6)}px monospace`; ctx.textAlign='center';
+        ctx.fillText('!',0,-b.h/2-42);
+        ctx.textAlign='left'; ctx.restore();
+      }
       // Boss HP bar over sprite
       const bw2=90, bh2=8, bx2=b.x-bw2/2, by2=b.y-b.h/2-22;
       ctx.fillStyle='#1a0808'; ctx.fillRect(bx2,by2,bw2,bh2);
@@ -1732,6 +1885,7 @@ function draw(){
   // Screen-space elements (drawn after camera restore)
   ctx.globalAlpha=1;
   drawScreenBubbles();
+  drawHealArrow();
   drawHUD();
 
   if(state==='gameover') drawGameOver();
