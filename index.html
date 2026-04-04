@@ -317,6 +317,7 @@ function drawTorpedo(b){
 // ── ROCKET ────────────────────────────────────────────
 function drawRocket(r){
   ctx.save(); ctx.translate(r.x,r.y); ctx.rotate(r.angle);
+  if(r.mini) ctx.scale(0.6,0.6);
   // Exhaust trail
   for(let i=0;i<5;i++){
     const a=(5-i)*0.08;
@@ -833,6 +834,19 @@ function fireRocket(){
     angle:ang, life:180, homing,
   });
   sfx.rocket();
+  // Backup subs fire mini rockets simultaneously
+  if(hasBackup){
+    const offsets=[Math.PI/2,-Math.PI/2];
+    offsets.forEach(off=>{
+      const side=player.angle+off;
+      const bx=player.x+Math.cos(side)*58, by=player.y+Math.sin(side)*58;
+      rockets.push({
+        x:bx+Math.cos(ang)*28, y:by+Math.sin(ang)*12,
+        vx:Math.cos(ang)*7.5, vy:Math.sin(ang)*7.5,
+        angle:ang, life:180, homing:hasHoming, mini:true,
+      });
+    });
+  }
 }
 
 function rocketExplode(r){
@@ -910,6 +924,20 @@ function spawnCthulhuPhase(phase){
     });
   }
   sfx.phase();
+}
+
+function fireBackupSubs(){
+  if(!hasBackup||!autoFire||player.shootCD!==0) return;
+  const offsets=[Math.PI/2,-Math.PI/2];
+  offsets.forEach(off=>{
+    const side=player.angle+off;
+    const bx=player.x+Math.cos(side)*58, by=player.y+Math.sin(side)*58;
+    bullets.push({
+      x:bx+Math.cos(player.angle)*20, y:by+Math.sin(player.angle)*10,
+      vx:Math.cos(player.angle)*9, vy:Math.sin(player.angle)*9,
+      angle:player.angle, life:80,
+    });
+  });
 }
 
 function doDash(){
@@ -1464,7 +1492,7 @@ function updateBosses(){
       if(!b.rushing&&!b.windingUp&&b.rushCD<=0){
         b.windingUp=true; b.windTimer=60;
         const ang=Math.atan2(player.y-b.y,player.x-b.x);
-        b.rushVx=Math.cos(ang)*14.4; b.rushVy=Math.sin(ang)*14.4; // 20% slower than 18
+        b.rushVx=Math.cos(ang)*15.84; b.rushVy=Math.sin(ang)*15.84; // 14.4 * 1.10
         sfx.warning();
       }
       if(b.windingUp){
@@ -1480,7 +1508,7 @@ function updateBosses(){
         // Steer toward player
         const dx=player.x-b.x, dy=player.y-b.y;
         const d=Math.sqrt(dx*dx+dy*dy)||1;
-        const spd=2.2;
+        const spd=2.42; // 2.2 * 1.10
         b.vx+=(dx/d*spd-b.vx)*0.05; b.vy+=(dy/d*spd-b.vy)*0.05;
         b.x+=b.vx; b.y+=b.vy;
         const mag=Math.sqrt(b.vx*b.vx+b.vy*b.vy)||1;
@@ -1586,6 +1614,7 @@ function update(){
     player.y=Math.max(40,Math.min(WORLD_H-40,player.y+vy2));
     camX+=(player.x-W/2-camX)*0.1; camY+=(player.y-H/2-camY)*0.1;
     if(autoFire) shoot();
+    fireBackupSubs();
     if(player.shootCD>0) player.shootCD--;
     if(player.invincible){ player.invTimer--; if(player.invTimer<=0) player.invincible=false; }
     bullets=bullets.filter(b=>b.life>0);
@@ -1688,18 +1717,9 @@ function update(){
   if(homingCD>0) homingCD--;
   updateHomingMissiles();
 
-  // Auto-fire
+  // Auto-fire (main + backup subs)
   if(autoFire) shoot();
-  // Backup sub auto-fire (fires simultaneously with main ship torpedoes)
-  if(hasBackup&&autoFire&&player.shootCD===0){
-    const offsets2=[Math.PI/2,-Math.PI/2];
-    offsets2.forEach(off=>{
-      const side=player.angle+off;
-      const bx=player.x+Math.cos(side)*58, by=player.y+Math.sin(side)*58;
-      bullets.push({x:bx+Math.cos(player.angle)*20,y:by+Math.sin(player.angle)*10,
-        vx:Math.cos(player.angle)*9,vy:Math.sin(player.angle)*9,angle:player.angle,life:80});
-    });
-  }
+  fireBackupSubs();
   if(player.shootCD>0) player.shootCD--;
   if(player.invincible){ player.invTimer--; if(player.invTimer<=0) player.invincible=false; }
 
