@@ -899,10 +899,18 @@ function spawnBoss(type){
       health:120,maxHealth:120,anim:0,hitFlash:0,
       shootCD:0, orbitAng:0, drawAngle:0});
   } else if(type==='shark'){
-    bosses.push({type:'shark',x:bx,y:by,vx:0,vy:0,w:120,h:60,
-      health:180,maxHealth:180,anim:0,hitFlash:0,
-      eatCD:0,rushCD:0,rushing:false,rushTimer:0,rushVx:0,rushVy:0,
-      windingUp:false,windTimer:0,drawAngle:0});
+    const sharkHP=Math.round(180*0.6); // 108 HP each (60% of original 180)
+    // Spawn two sharks on opposite sides
+    for(let i=0;i<2;i++){
+      const ang2=i*Math.PI; // opposite sides
+      const r2=180;
+      const sx=player.x+Math.cos(ang2)*r2, sy=player.y+Math.sin(ang2)*r2;
+      // Stagger rush CDs so they don't rush simultaneously
+      bosses.push({type:'shark',x:sx,y:sy,vx:0,vy:0,w:120,h:60,
+        health:sharkHP,maxHealth:sharkHP,anim:0,hitFlash:0,
+        eatCD:i*180,rushCD:i*150,rushing:false,rushTimer:0,rushVx:0,rushVy:0,
+        windingUp:false,windTimer:0,drawAngle:0});
+    }
   } else if(type==='cthulhu'){
     cthulhuPhase=1;
     spawnCthulhuPhase(1);
@@ -927,7 +935,7 @@ function spawnCthulhuPhase(phase){
 }
 
 function fireBackupSubs(){
-  if(!hasBackup||!autoFire||player.shootCD!==0) return;
+  if(!hasBackup) return;
   const offsets=[Math.PI/2,-Math.PI/2];
   offsets.forEach(off=>{
     const side=player.angle+off;
@@ -1613,8 +1621,9 @@ function update(){
     player.x=Math.max(40,Math.min(WORLD_W-40,player.x+vx2));
     player.y=Math.max(40,Math.min(WORLD_H-40,player.y+vy2));
     camX+=(player.x-W/2-camX)*0.1; camY+=(player.y-H/2-camY)*0.1;
+    const willShoot2=autoFire&&player.shootCD===0;
     if(autoFire) shoot();
-    fireBackupSubs();
+    if(willShoot2) fireBackupSubs();
     if(player.shootCD>0) player.shootCD--;
     if(player.invincible){ player.invTimer--; if(player.invTimer<=0) player.invincible=false; }
     bullets=bullets.filter(b=>b.life>0);
@@ -1717,9 +1726,10 @@ function update(){
   if(homingCD>0) homingCD--;
   updateHomingMissiles();
 
-  // Auto-fire (main + backup subs)
+  // Auto-fire (main + backup subs fire on same frame)
+  const willShoot=autoFire&&player.shootCD===0;
   if(autoFire) shoot();
-  fireBackupSubs();
+  if(willShoot) fireBackupSubs();
   if(player.shootCD>0) player.shootCD--;
   if(player.invincible){ player.invTimer--; if(player.invTimer<=0) player.invincible=false; }
 
