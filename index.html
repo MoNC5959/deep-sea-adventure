@@ -897,7 +897,7 @@ function spawnBoss(type){
   if(type==='octopus'){
     bosses.push({type:'octopus',x:bx,y:by,vx:0,vy:0,w:120,h:120,
       health:120,maxHealth:120,anim:0,hitFlash:0,
-      shootCD:0, orbitAng:0, drawAngle:0});
+      shootCD:60, orbitAng:0, drawAngle:0, spawnAlpha:0});
   } else if(type==='shark'){
     const sharkHP=Math.round(180*0.6); // 108 HP each (60% of original 180)
     // Spawn two sharks on opposite sides
@@ -908,8 +908,8 @@ function spawnBoss(type){
       // Stagger rush CDs so they don't rush simultaneously
       bosses.push({type:'shark',x:sx,y:sy,vx:0,vy:0,w:120,h:60,
         health:sharkHP,maxHealth:sharkHP,anim:0,hitFlash:0,
-        eatCD:i*180,rushCD:i*150,rushing:false,rushTimer:0,rushVx:0,rushVy:0,
-        windingUp:false,windTimer:0,drawAngle:0});
+        eatCD:i*180,rushCD:60+i*150,rushing:false,rushTimer:0,rushVx:0,rushVy:0,
+        windingUp:false,windTimer:0,drawAngle:0, spawnAlpha:0});
     }
   } else if(type==='cthulhu'){
     cthulhuPhase=1;
@@ -928,7 +928,7 @@ function spawnCthulhuPhase(phase){
     bosses.push({
       type:'cthulhu',phase,x:player.x+Math.cos(ang)*r,y:player.y+Math.sin(ang)*r,
       vx:0,vy:0,w:120*sc,h:120*sc,health:hp,maxHealth:hp,anim:0,hitFlash:0,
-      shootCD:Math.floor(i*40),drawAngle:0,
+      shootCD:60+Math.floor(i*40),drawAngle:0, spawnAlpha:0,
     });
   }
   sfx.phase();
@@ -1442,6 +1442,8 @@ function updateLevelState(){
       if(level===1) spawnBoss('octopus');
       else if(level===2) spawnBoss('shark');
       else spawnBoss('cthulhu');
+      // 1 second of invincibility so boss can't instant-hit on spawn
+      player.invincible=true; player.invTimer=60;
     }
   } else if(levelState==='transition'){
     levelStateTimer--;
@@ -1450,6 +1452,7 @@ function updateLevelState(){
       else {
         level++; xp=0; levelState='playing'; levelStateTimer=0;
         enemies=[]; bossProjectiles=[];
+        lives=3; // full heal between levels
         sfx.levelup();
       }
     }
@@ -1462,6 +1465,7 @@ function updateBosses(){
   bosses.forEach(b=>{
     b.anim++;
     if(b.hitFlash>0) b.hitFlash--;
+    if(b.spawnAlpha<1) b.spawnAlpha=Math.min(1,b.spawnAlpha+0.025); // ~40 frame fade-in
 
     if(b.type==='octopus'){
       // Orbit player slowly
@@ -1571,7 +1575,7 @@ function updateBosses(){
   });
 
   // Boss vs player contact
-  bosses.forEach(b=>{ if(dist2(player.x,player.y,b.x,b.y)<(player.r+b.w*0.35)**2) hitPlayer(); });
+  bosses.forEach(b=>{ if(b.spawnAlpha>=1&&dist2(player.x,player.y,b.x,b.y)<(player.r+b.w*0.35)**2) hitPlayer(); });
 
   // Handle dead bosses
   const prevCount=bosses.length;
@@ -1894,7 +1898,10 @@ function draw(){
     // Boss enemies
     bosses.forEach(b=>{
       ctx.save();
-      if(b.hitFlash>0) ctx.globalAlpha=0.35+Math.abs(Math.sin(b.hitFlash*0.9))*0.65;
+      const baseAlpha=b.spawnAlpha??1;
+      ctx.globalAlpha=b.hitFlash>0
+        ? baseAlpha*(0.35+Math.abs(Math.sin(b.hitFlash*0.9))*0.65)
+        : baseAlpha;
       if(b.type==='octopus') drawBossOctopus(b);
       if(b.type==='shark')   drawBossShark(b);
       if(b.type==='cthulhu') drawBossCthulhu(b);
