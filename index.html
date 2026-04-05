@@ -1399,6 +1399,13 @@ function updateHealItems(){
 }
 
 // ── HOMING MISSILES ───────────────────────────────────
+function spawnHomingSplit(m){
+  for(let s=-1;s<=1;s+=2){
+    const a=m.angle+s*0.45;
+    homingMissiles.push({x:m.x,y:m.y,vx:Math.cos(a)*8,vy:Math.sin(a)*8,angle:a,life:160,mini:true});
+  }
+}
+
 function updateHomingMissiles(){
   homingMissiles=homingMissiles.filter(m=>{
     m.life--;
@@ -1414,10 +1421,21 @@ function updateHomingMissiles(){
     }
     m.vx=Math.cos(m.angle)*8; m.vy=Math.sin(m.angle)*8;
     m.x+=m.vx; m.y+=m.vy;
-    // Hit enemy
+    // Hit enemy or boss
+    for(let i=0;i<bosses.length;i++){
+      if(dist2(m.x,m.y,bosses[i].x,bosses[i].y)<(bosses[i].w*0.45)**2){
+        bosses[i].health-=3; bosses[i].hitFlash=10; trackDamage(3);
+        spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit();
+        if(!m.mini) spawnHomingSplit(m);
+        return false;
+      }
+    }
     for(let i=0;i<enemies.length;i++){
       if(dist2(m.x,m.y,enemies[i].x,enemies[i].y)<(enemies[i].w*0.45)**2){
-        enemies[i].health-=3; enemies[i].hitFlash=10; trackDamage(3); spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit(); return false;
+        enemies[i].health-=3; enemies[i].hitFlash=10; trackDamage(3);
+        spawnExplosion(m.x,m.y,'#00eeff'); sfx.hit();
+        if(!m.mini) spawnHomingSplit(m);
+        return false;
       }
     }
     return m.life>0;
@@ -1532,7 +1550,7 @@ function updateBosses(){
       // Slow orbit/drift
       const dx=player.x-b.x, dy=player.y-b.y;
       const d=Math.sqrt(dx*dx+dy*dy)||1;
-      const spd=b.phase===1?1.2:b.phase===2?1.6:2.0;
+      const spd=b.phase===1?1.38:b.phase===2?1.84:2.3; // +15%
       b.vx+=(dx/d*spd-b.vx)*0.025; b.vy+=(dy/d*spd-b.vy)*0.025;
       b.x+=b.vx; b.y+=b.vy;
       // Shoot rocks toward player
@@ -1540,7 +1558,10 @@ function updateBosses(){
       if(b.shootCD<=0){
         b.shootCD=b.phase===1?100:b.phase===2?70:50;
         const ang=Math.atan2(player.y-b.y,player.x-b.x)+(Math.random()-0.5)*0.4;
+        // Fire 2 rocks — one aimed, one offset by ~25°
         bossProjectiles.push({type:'rock',x:b.x,y:b.y,vx:Math.cos(ang)*3.5,vy:Math.sin(ang)*3.5,r:13,life:180});
+        const ang2=ang+0.44;
+        bossProjectiles.push({type:'rock',x:b.x,y:b.y,vx:Math.cos(ang2)*3.5,vy:Math.sin(ang2)*3.5,r:13,life:180});
         sfx.rockimp();
       }
     }
