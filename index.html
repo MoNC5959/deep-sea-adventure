@@ -104,6 +104,7 @@ let bosses=[];
 let bossProjectiles=[];
 let cthulhuPhase=1;                   // 1=large, 2=medium×2, 3=small×4
 let hasHoming=false, backupCount=0;  // 0=none, 1=one ship, 2=two ships
+let octopusBossDefeated=false;        // regular octopi shoot faster after boss is beaten
 let homingMissiles=[];
 let homingCD=0;
 const HOMING_CD_MAX=240;
@@ -983,7 +984,7 @@ function startGame(){
   // Level reset
   level=1; xp=0; levelState='playing'; levelStateTimer=0;
   bosses=[]; bossProjectiles=[]; homingMissiles=[];
-  hasHoming=false; backupCount=0; homingCD=0; cthulhuPhase=1;
+  hasHoming=false; backupCount=0; homingCD=0; cthulhuPhase=1; octopusBossDefeated=false;
   healItem=null; dmgDealt=0;
   dashCD=0; dashVx=0; dashVy=0; dashTimer=0; dashTrails=[];
   player.x=WORLD_W/2; player.y=WORLD_H/2; player.angle=0;
@@ -1177,7 +1178,7 @@ function drawWarningScreen(){
 function drawTransitionScreen(){
   ctx.fillStyle='rgba(4,12,24,0.78)'; ctx.fillRect(0,0,W,H);
   ctx.textAlign='center';
-  const ability=level===1?'BACKUP SHIP DEPLOYED!':(level===2?'2ND BACKUP SHIP DEPLOYED!':'HOMING ROCKETS UNLOCKED!');
+  const ability=level===1?'BACKUP SHIP DEPLOYED!':(level===2?'2ND BACKUP SHIP + HOMING ROCKETS UNLOCKED!':'FINAL LEVEL COMPLETE!');
   const col=level===1?'#00eeff':level===2?'#44ff88':'#f4c830';
   ctx.fillStyle='#f4c830'; ctx.font='bold 38px monospace'; ctx.fillText('LEVEL CLEAR!',W/2,H/2-50);
   ctx.fillStyle=col; ctx.font='bold 20px monospace'; ctx.fillText(ability,W/2,H/2);
@@ -1471,7 +1472,9 @@ function updateLevelState(){
       else {
         level++; xp=0; levelState='playing'; levelStateTimer=0;
         enemies=[]; bossProjectiles=[];
-        lives=3; // full heal between levels
+        lives=3;
+        // Grant level upgrade on entry
+        if(level===3) hasHoming=true;
         sfx.levelup();
       }
     }
@@ -1597,7 +1600,18 @@ function updateBosses(){
   });
 
   // Boss vs player contact
-  bosses.forEach(b=>{ if(b.spawnAlpha>=1&&dist2(player.x,player.y,b.x,b.y)<(player.r+b.w*0.35)**2) hitPlayer(); });
+  bosses.forEach(b=>{
+    if(b.spawnAlpha>=1&&dist2(player.x,player.y,b.x,b.y)<(player.r+b.w*0.35)**2){
+      if(b.type==='shark'&&b.rushing){
+        // Rush hit = instant kill regardless of invincibility
+        lives=0; state='gameover'; autoFire=false;
+        if(score>highScore){ highScore=score; localStorage.setItem('dsa_hs',highScore); }
+        spawnBigExplosion(player.x,player.y); sfx.over();
+      } else {
+        hitPlayer();
+      }
+    }
+  });
 
   // Handle dead bosses
   const prevCount=bosses.length;
@@ -1615,9 +1629,9 @@ function updateBosses(){
       cthulhuPhase++; spawnCthulhuPhase(cthulhuPhase); return;
     }
     // Boss fully defeated — grant ability + go to transition
-    if(level===1) backupCount=1;
+    if(level===1){ backupCount=1; octopusBossDefeated=true; }
     else if(level===2) backupCount=2;
-    else if(level===3) hasHoming=true;
+    // level 3 homing already granted on level entry
     levelState='transition'; levelStateTimer=240;
     sfx.levelup();
   }
@@ -1823,12 +1837,12 @@ function update(){
     e.vx+=(dx/dist*e.speed-e.vx)*steer;
     e.vy+=(dy/dist*e.speed-e.vy)*steer;
     if(e.type==='jellyfish'){ e.vx+=Math.cos(e.anim*0.07)*0.38; e.vy+=Math.sin(e.anim*0.09)*0.38; }
-    // Octopus regular enemy: fires a single ink blob every ~3.5s
+    // Octopus regular enemy: shoots faster after boss defeated
     if(e.type==='octopus'){
-      if(!e.shootCD) e.shootCD=120+Math.floor(Math.random()*80);
+      if(!e.shootCD) e.shootCD=80+Math.floor(Math.random()*60);
       e.shootCD--;
       if(e.shootCD<=0){
-        e.shootCD=200;
+        e.shootCD=octopusBossDefeated?90:200;
         const ang=Math.atan2(player.y-e.y,player.x-e.x);
         bossProjectiles.push({type:'ink',x:e.x,y:e.y,vx:Math.cos(ang)*4,vy:Math.sin(ang)*4,r:9,life:120});
         sfx.inkblob();
